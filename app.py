@@ -1,107 +1,108 @@
 import streamlit as st
 import pandas as pd
-import os
+import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.cluster import KMeans
-from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error
-import numpy as np
 
 # ===============================
 # KONFIGURASI HALAMAN
 # ===============================
 st.set_page_config(
-    page_title="Analisis Clustering & Regresi COVID-19 Indonesia",
+    page_title="Analisis COVID-19 Indonesia",
     layout="wide"
 )
 
 st.title("📊 Analisis Clustering & Regresi COVID-19 Indonesia")
-st.write("Aplikasi ini menampilkan hasil **clustering provinsi** dan **regresi linear** COVID-19.")
+st.write("Aplikasi ini menampilkan clustering provinsi dan regresi linear COVID-19.")
 
 # ===============================
-# LOAD DATA (ABSOLUTE PATH)
+# LOAD DATA
 # ===============================
 @st.cache_data
 def load_data():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    data_path = os.path.join(base_dir, "data", "Covid-19_Indonesia_Dataset.csv")
-
-    if not os.path.exists(data_path):
-        st.error("❌ Dataset tidak ditemukan. Pastikan file ada di folder data/")
-        st.stop()
-
-    df = pd.read_csv(data_path)
+    df = pd.read_csv("Covid-19_Indonesia_Dataset.csv")
+    df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%m/%d/%Y', errors='coerce')
     return df
 
 df = load_data()
 
 # ===============================
-# PREPROCESSING
+# FILTER DATA
 # ===============================
-df['Tanggal'] = pd.to_datetime(df['Tanggal'], format='%m/%d/%Y')
-
-df_cluster = df[df['Tanggal'] == '2022-09-15'].copy()
+tanggal = st.date_input("📅 Pilih Tanggal", value=pd.to_datetime("2022-09-15"))
+df_cluster = df[df['Tanggal'] == pd.to_datetime(tanggal)].copy()
 df_cluster = df_cluster[df_cluster['Provinsi'].notnull()]
 
+# ===============================
+# FITUR
+# ===============================
 df_cluster = df_cluster[
-    [
-        'Provinsi',
-        'Total_Kasus',
-        'Total_Kematian',
-        'Total_Sembuh',
-        'Kepadatan_Penduduk',
-        'Populasi',
-        'Total_Kasus_Per_Juta',
-        'Total_Kematian_Per_Juta'
-    ]
-].copy()
+    ['Provinsi','Total_Kasus','Total_Kematian','Total_Sembuh',
+     'Populasi','Kepadatan_Penduduk',
+     'Total_Kasus_Per_Juta','Total_Kematian_Per_Juta']
+]
 
 df_cluster['Rasio_Kematian'] = df_cluster['Total_Kematian'] / df_cluster['Total_Kasus']
 df_cluster['Rasio_Kesembuhan'] = df_cluster['Total_Sembuh'] / df_cluster['Total_Kasus']
-df_cluster = df_cluster.dropna()
+df_cluster.fillna(0, inplace=True)
+
+fitur = [
+    'Total_Kasus','Total_Kematian','Total_Sembuh','Populasi',
+    'Kepadatan_Penduduk','Total_Kasus_Per_Juta',
+    'Total_Kematian_Per_Juta','Rasio_Kematian','Rasio_Kesembuhan'
+]
 
 # ===============================
-# CLUSTERING K-MEANS
+# SCALING
 # ===============================
-features = df_cluster.drop(columns=['Provinsi'])
-
 scaler = MinMaxScaler()
-scaled_features = scaler.fit_transform(features)
-
-kmeans = KMeans(n_clusters=3, random_state=42)
-df_cluster['Cluster'] = kmeans.fit_predict(scaled_features)
+scaled_df = scaler.fit_transform(df_cluster[fitur])
 
 # ===============================
-# TAMPILKAN DATA CLUSTER
+# CLUSTERING
 # ===============================
-st.subheader("📌 Hasil Clustering Provinsi")
-st.dataframe(df_cluster[['Provinsi', 'Cluster']])
+st.subheader("🔹 Clustering Provinsi")
+
+k = st.slider("Jumlah Cluster (k)", 2, 7, 5)
+kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+df_cluster['Cluster'] = kmeans.fit_predict(scaled_df)
 
 # ===============================
 # VISUALISASI CLUSTER
 # ===============================
-st.subheader("📈 Visualisasi Clustering")
-
-fig1, ax1 = plt.subplots()
-scatter = ax1.scatter(
-    df_cluster['Total_Kasus_Per_Juta'],
-    df_cluster['Total_Kematian_Per_Juta'],
-    c=df_cluster['Cluster']
+fig, ax = plt.subplots(figsize=(10,6))
+sns.scatterplot(
+    data=df_cluster,
+    x='Kepadatan_Penduduk',
+    y='Total_Kematian_Per_Juta',
+    hue='Cluster',
+    palette='viridis',
+    s=100,
+    ax=ax
 )
-ax1.set_xlabel("Total Kasus per Juta")
-ax1.set_ylabel("Total Kematian per Juta")
-ax1.set_title("Clustering Provinsi COVID-19")
+ax.set_title("Sebaran Cluster Provinsi")
+ax.grid(True)
+st.pyplot(fig)
 
-st.pyplot(fig1)
+# ===============================
+# RINGKASAN CLUSTER
+# ===============================
+st.subheader("📌 Karakteristik Rata-rata Cluster")
+summary = df_cluster.groupby('Cluster')[fitur].mean()
+st.dataframe(summary)
 
 # ===============================
 # REGRESI LINEAR
 # ===============================
-st.subheader("📉 Regresi Linear")
+st.subheader("📈 Regresi Linear")
 
-X = df_cluster[['Total_Kasus_Per_Juta']]
+X = df_cluster[['Populasi','Kepadatan_Penduduk','Total_Kasus_Per_Juta']]
 y = df_cluster['Total_Kematian_Per_Juta']
 
 X_train, X_test, y_train, y_test = train_test_split(
@@ -116,31 +117,21 @@ y_pred = model.predict(X_test)
 r2 = r2_score(y_test, y_pred)
 rmse = np.sqrt(mean_squared_error(y_test, y_pred))
 
-# ===============================
-# HASIL REGRESI
-# ===============================
-st.markdown("### ✅ Hasil Regresi Linear")
-st.write(f"**R² Score :** {r2:.3f}")
-st.write(f"**RMSE :** {rmse:.3f}")
+st.write(f"**R² Score:** {r2:.3f}")
+st.write(f"**RMSE:** {rmse:.3f}")
 
 # ===============================
-# VISUALISASI REGRESI
+# PREDIKSI VS AKTUAL
 # ===============================
-fig2, ax2 = plt.subplots()
-ax2.scatter(X_test, y_test)
-ax2.plot(X_test, y_pred)
-ax2.set_xlabel("Total Kasus per Juta")
-ax2.set_ylabel("Total Kematian per Juta")
-ax2.set_title("Regresi Linear COVID-19")
-
+fig2, ax2 = plt.subplots(figsize=(6,5))
+ax2.scatter(y_test, y_pred)
+ax2.plot([y_test.min(), y_test.max()],
+         [y_test.min(), y_test.max()],
+         'r--')
+ax2.set_xlabel("Aktual")
+ax2.set_ylabel("Prediksi")
+ax2.set_title("Prediksi vs Aktual")
+ax2.grid(True)
 st.pyplot(fig2)
 
-# ===============================
-# KESIMPULAN
-# ===============================
-st.subheader("📝 Kesimpulan")
-st.write("""
-- Clustering membagi provinsi menjadi **3 kelompok** berdasarkan tingkat kasus dan kematian COVID-19.
-- Regresi linear menunjukkan hubungan yang **kuat** antara jumlah kasus dan kematian.
-- Nilai **R² mendekati 1** menandakan model cukup baik.
-""")
+st.success("✅ Aplikasi berhasil dijalankan tanpa error")
