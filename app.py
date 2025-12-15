@@ -136,3 +136,4 @@ st.pyplot(fig2)
 
 st.success("✅ Aplikasi berhasil dijalankan tanpa error")
 
+
